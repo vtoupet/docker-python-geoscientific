@@ -1,10 +1,17 @@
-FROM vincejah/python-scientific:0.1
-
 ARG GDAL_VERSION=3.0.4
-ARG GDAL_SOURCE_DIR=/usr/local/src/python-gdal
-
 ARG PROJ_VERSION=6.3.1
-ARG PROJ_SOURCE_DIR=/usr/local/src/proj
+ARG INSTALL_PREFIX=/usr/local
+
+FROM vincejah/python-scientific:0.1 as builder
+
+ARG INSTALL_PREFIX
+
+ARG GDAL_VERSION
+ARG GDAL_SOURCE_DIR=${INSTALL_PREFIX}/src/python-gdal
+
+ARG PROJ_VERSION
+ARG PROJ_SOURCE_DIR=${INSTALL_PREFIX}/src/proj
+
 
 # Install runtime dependencies
 RUN apt-get update \
@@ -25,7 +32,7 @@ RUN apt-get update \
         libopenjp2-7-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Build against PROJ master (which will be released as PROJ 6.0)
+# Build PROJ
 RUN mkdir -p "${PROJ_SOURCE_DIR}" \
     && cd "${PROJ_SOURCE_DIR}" \
     && wget "http://download.osgeo.org/proj/proj-${PROJ_VERSION}.tar.gz" \
@@ -35,16 +42,20 @@ RUN mkdir -p "${PROJ_SOURCE_DIR}" \
     && chmod +x proj/autogen.sh \
     && cd proj \
     && ./autogen.sh \
-    && CXXFLAGS='-DPROJ_RENAME_SYMBOLS' CFLAGS='-DPROJ_RENAME_SYMBOLS' ./configure --disable-static --prefix=/usr/local \
+    && CXXFLAGS='-DPROJ_RENAME_SYMBOLS -O2' CFLAGS='-DPROJ_RENAME_SYMBOLS -O2' \
+        ./configure --disable-static --prefix=${INSTALL_PREFIX} \
     && make -j"$(nproc)" \
-    && make -j"$(nproc)" install
-
-# Rename the library to libinternalproj
-RUN mv /usr/local/lib/libproj.so.15.3.1 /usr/local/lib/libinternalproj.so.15.3.1 \
-    && rm /usr/local/lib/libproj.so* \
-    && rm /usr/local/lib/libproj.la \
-    && ln -s libinternalproj.so.15.3.1 /usr/local/lib/libinternalproj.so.15 \
-    && ln -s libinternalproj.so.15.3.1 /usr/local/lib/libinternalproj.so
+    && make install DESTDIR="/build" \
+    # Rename the library to libinternalproj
+    && PROJ_SO=$(readlink /build${INSTALL_PREFIX}/lib/libproj.so | sed "s/libproj\.so\.//") \
+    && PROJ_SO_FIRST=$(echo $PROJ_SO | awk 'BEGIN {FS="."} {print $1}') \
+    && mv /build${INSTALL_PREFIX}/lib/libproj.so.${PROJ_SO} /build${INSTALL_PREFIX}/lib/libinternalproj.so.${PROJ_SO} \
+    && ln -s libinternalproj.so.${PROJ_SO} /build${INSTALL_PREFIX}/lib/libinternalproj.so.${PROJ_SO_FIRST} \
+    && ln -s libinternalproj.so.${PROJ_SO} /build${INSTALL_PREFIX}/lib/libinternalproj.so \
+    && rm /build${INSTALL_PREFIX}/lib/libproj.*  \
+    && ln -s libinternalproj.so.${PROJ_SO} /build${INSTALL_PREFIX}/lib/libproj.so.${PROJ_SO_FIRST} \
+    && strip -s /build${INSTALL_PREFIX}/lib/libinternalproj.so.${PROJ_SO} \
+    && for i in /build${INSTALL_PREFIX}/bin/*; do strip -s $i 2>/dev/null || /bin/true; done
 
 # Clean up PROJ sources
 RUN rm -rf "${PROJ_SOURCE_DIR}"
@@ -59,22 +70,45 @@ RUN mkdir -p "${GDAL_SOURCE_DIR}" \
     && tar -xvf "gdal-${GDAL_VERSION}.tar.gz" \
     # Compile and install GDAL
     && cd "gdal-${GDAL_VERSION}" \
-    && export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH \
-    && ./configure \
+    && export LD_LIBRARY_PATH=${INSTALL_PREFIX}/lib:$LD_LIBRARY_PATH \
+    && ./configure --prefix=/usr --without-libtool \
+            --with-hide-internal-symbols \
+            --with-jpeg12 \
             --with-python \
-            --with-curl \
-            --with-openjpeg \
-            --without-libtool \
-            --with-proj=/usr/local \
+            --with-webp --with-proj=/build${INSTALL_PREFIX} \
+            --with-libtiff=internal --with-rename-internal-libtiff-symbols \
+            --with-geotiff=internal --with-rename-internal-libgeotiff-symbols \
     && make -j"$(nproc)" \
-    && make install \
-    && ldconfig
+    && make install DESTDIR="/build" \
+    # Rename things
+    && mkdir -p /build_gdal_python/usr/lib \
+    && mkdir -p /build_gdal_python/usr/bin \
+    && mkdir -p /build_gdal_version_changing/usr/include
+
+RUN \
+#    && mv /build/usr/lib/python3            /build_gdal_python/usr/lib \
+    mv /build/usr/lib                    /build_gdal_version_changing/usr \
+    && mv /build/usr/include/gdal_version.h /build_gdal_version_changing/usr/include \
+    && mv /build/usr/bin/*.py               /build_gdal_python/usr/bin \
+    && mv /build/usr/bin                    /build_gdal_version_changing/usr \
+    && for i in /build_gdal_version_changing/usr/lib/*; do strip -s $i 2>/dev/null || /bin/true; done \
+    && for i in /build_gdal_python/usr/lib/python3/dist-packages/osgeo/*.so; do strip -s $i 2>/dev/null || /bin/true; done \
+    && for i in /build_gdal_version_changing/usr/bin/*; do strip -s $i 2>/dev/null || /bin/true; done
 
 # Cleanup GDAL sources
 RUN rm -rf "${GDAL_SOURCE_DIR}"
 
-# Clean up
-RUN apt-get update -y \
-    && apt-get remove -y --purge build-essential wget \
-    && apt-get autoremove -y \
-    && rm -rf /var/lib/apt/lists/*
+FROM vincejah/python-scientific:0.1 as final
+
+ARG INSTALL_PREFIX
+#COPY --from=builder  /build${INSTALL_PREFIX}/share/proj/ ${INSTALL_PREFIX}/share/proj/
+COPY --from=builder  /build${INSTALL_PREFIX}/include/ ${INSTALL_PREFIX}/include/
+COPY --from=builder  /build${INSTALL_PREFIX}/bin/ ${INSTALL_PREFIX}/bin/
+COPY --from=builder  /build${INSTALL_PREFIX}/lib/ ${INSTALL_PREFIX}/lib/
+
+COPY --from=builder  /build/usr/share/gdal/ /usr/share/gdal/
+COPY --from=builder  /build/usr/include/ /usr/include/
+COPY --from=builder  /build_gdal_python/usr/ /usr/
+COPY --from=builder  /build_gdal_version_changing/usr/ /usr/
+
+RUN ldconfig
