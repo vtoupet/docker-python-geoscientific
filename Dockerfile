@@ -1,116 +1,180 @@
-ARG GDAL_VERSION=3.0.4
-ARG PROJ_VERSION=6.3.1
-ARG PYPROJ_VERSION=2.6.0
-ARG INSTALL_PREFIX=/usr/local
-ARG PYTHON_SHORT_VERSION=3.8
+#----------------------------------- #
+# gdal-base image with full build deps
+# github: perrygeo/docker-gdal-base
+# docker: perrygeo/gdal-base
+#----------------------------------- #
+FROM python:3.8-slim-buster as builder
 
-FROM vincejah/python-scientific:0.1 as builder
-
-ARG INSTALL_PREFIX
-
-ARG GDAL_VERSION
-ARG GDAL_SOURCE_DIR=${INSTALL_PREFIX}/src/python-gdal
-
-ARG PROJ_VERSION
-ARG PROJ_SOURCE_DIR=${INSTALL_PREFIX}/src/proj
-ARG PYPROJ_VERSION
-
-# Install runtime dependencies
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+RUN apt-get update
+RUN apt-get install -y --no-install-recommends \
         build-essential \
-        wget \
-        automake libtool pkg-config libsqlite3-dev sqlite3 \
-        libpq-dev \
-        libcurl4-gnutls-dev \
-        libproj-dev \
+        ca-certificates \
+        cmake \
+        g++ \
+        gcc \
+        gfortran \
+        git \
+        libfreexl-dev \
+        libgrib-api-dev \
         libxml2-dev \
-        libgeos-dev \
-        libnetcdf-dev \
-        libpoppler-dev \
-        libspatialite-dev \
-        libhdf4-alt-dev \
-        libhdf5-serial-dev \
-        libopenjp2-7-dev \
-    && rm -rf /var/lib/apt/lists/*
+        pkg-config \
+        unzip \
+        zlib1g-dev \
+        wget
 
-# Build PROJ
-RUN mkdir -p "${PROJ_SOURCE_DIR}" \
-    && cd "${PROJ_SOURCE_DIR}" \
-    && wget "http://download.osgeo.org/proj/proj-${PROJ_VERSION}.tar.gz" \
-    && tar -xzf "proj-${PROJ_VERSION}.tar.gz" \
-    && mv proj-${PROJ_VERSION} proj \
-    && echo "#!/bin/sh" > proj/autogen.sh \
-    && chmod +x proj/autogen.sh \
-    && cd proj \
-    && ./autogen.sh \
-    && CXXFLAGS='-DPROJ_RENAME_SYMBOLS -O2' CFLAGS='-DPROJ_RENAME_SYMBOLS -O2' \
-        ./configure --disable-static --prefix=${INSTALL_PREFIX} \
-    && make -j"$(nproc)" \
-    && make install DESTDIR="/build" \
-    # Rename the library to libinternalproj
-    && PROJ_SO=$(readlink /build${INSTALL_PREFIX}/lib/libproj.so | sed "s/libproj\.so\.//") \
-    && PROJ_SO_FIRST=$(echo $PROJ_SO | awk 'BEGIN {FS="."} {print $1}') \
-    && mv /build${INSTALL_PREFIX}/lib/libproj.so.${PROJ_SO} /build${INSTALL_PREFIX}/lib/libinternalproj.so.${PROJ_SO} \
-    && ln -s libinternalproj.so.${PROJ_SO} /build${INSTALL_PREFIX}/lib/libinternalproj.so.${PROJ_SO_FIRST} \
-    && ln -s libinternalproj.so.${PROJ_SO} /build${INSTALL_PREFIX}/lib/libinternalproj.so \
-    && rm /build${INSTALL_PREFIX}/lib/libproj.*  \
-    && ln -s libinternalproj.so.${PROJ_SO} /build${INSTALL_PREFIX}/lib/libproj.so.${PROJ_SO_FIRST} \
-    && strip -s /build${INSTALL_PREFIX}/lib/libinternalproj.so.${PROJ_SO} \
-    && for i in /build${INSTALL_PREFIX}/bin/*; do strip -s $i 2>/dev/null || /bin/true; done
+WORKDIR /tmp
 
-# Build pyproj
-RUN export PROJ_DIR=/build${INSTALL_PREFIX}/ \
-    && export LD_LIBRARY_PATH=/build${INSTALL_PREFIX}/lib:$LD_LIBRARY_PATH \
-    && pip install pyproj==${PYPROJ_VERSION} --no-binary pyproj
+# using gdal master
+ENV CURL_VERSION 7.61.1
+ENV GDAL_VERSION 3.0.4
+ENV GEOS_VERSION 3.8.0
+ENV OPENJPEG_VERSION 2.3.1
+ENV PROJ_VERSION 7.0.0
+ENV SPATIALITE_VERSION 4.3.0a
+ENV SQLITE_VERSION 3270200
+ENV WEBP_VERSION 1.0.0
+ENV ZSTD_VERSION 1.3.4
+ENV TIFF_VERSION 4.1.0
+ENV GEOTIFF_VERSION 1.5.1
+ENV ECCODES_VERSION=2.16.0
+ENV NUMPY_VERSION=1.18.2
+ENV PANDAS_VERSION=1.0.3
 
-##################
-# GDAL
-##################
-RUN mkdir -p "${GDAL_SOURCE_DIR}" \
-    && cd "${GDAL_SOURCE_DIR}" \
-    # Get latest GDAL source
-    && wget "http://download.osgeo.org/gdal/${GDAL_VERSION}/gdal-${GDAL_VERSION}.tar.gz" \
-    && tar -xvf "gdal-${GDAL_VERSION}.tar.gz" \
-    # Compile and install GDAL
-    && cd "gdal-${GDAL_VERSION}" \
-    && export LD_LIBRARY_PATH=${INSTALL_PREFIX}/lib:$LD_LIBRARY_PATH \
-    && ./configure --prefix=/usr --without-libtool \
-            --with-hide-internal-symbols \
-            --with-jpeg12 \
-            --with-python \
-            --with-webp --with-proj=/build${INSTALL_PREFIX} \
-            --with-libtiff=internal --with-rename-internal-libtiff-symbols \
-            --with-geotiff=internal --with-rename-internal-libgeotiff-symbols \
-    && make -j"$(nproc)" \
-    && make install DESTDIR="/build" \
-    # Rename things
-    && mkdir -p /build_gdal_python/usr/lib \
-    && mkdir -p /build_gdal_python/usr/bin \
-    && mkdir -p /build_gdal_version_changing/usr/include \
-    && mv /build/usr/lib                    /build_gdal_version_changing/usr \
-    && mv /build/usr/include/gdal_version.h /build_gdal_version_changing/usr/include \
-    && mv /build/usr/bin/*.py               /build_gdal_python/usr/bin \
-    && mv /build/usr/bin                    /build_gdal_version_changing/usr \
-    && for i in /build_gdal_version_changing/usr/lib/*; do strip -s $i 2>/dev/null || /bin/true; done \
-    && for i in /build_gdal_python/usr/lib/python3/dist-packages/osgeo/*.so; do strip -s $i 2>/dev/null || /bin/true; done \
-    && for i in /build_gdal_version_changing/usr/bin/*; do strip -s $i 2>/dev/null || /bin/true; done
+RUN wget -q https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-${WEBP_VERSION}.tar.gz
+RUN wget -q -O zstd-${ZSTD_VERSION}.tar.gz https://github.com/facebook/zstd/archive/v${ZSTD_VERSION}.tar.gz
+RUN wget -q https://download.osgeo.org/geos/geos-${GEOS_VERSION}.tar.bz2
+RUN wget -q https://download.osgeo.org/proj/proj-${PROJ_VERSION}.tar.gz
+RUN wget -q https://curl.haxx.se/download/curl-${CURL_VERSION}.tar.gz
+RUN wget -q http://download.osgeo.org/geotiff/libgeotiff/libgeotiff-${GEOTIFF_VERSION}.tar.gz
+RUN wget -q -O openjpeg-${OPENJPEG_VERSION}.tar.gz https://github.com/uclouvain/openjpeg/archive/v${OPENJPEG_VERSION}.tar.gz
+RUN wget -q https://download.osgeo.org/gdal/${GDAL_VERSION}/gdal-${GDAL_VERSION}.tar.gz
+RUN wget -q https://www.sqlite.org/2019/sqlite-autoconf-${SQLITE_VERSION}.tar.gz
+RUN wget -q https://www.gaia-gis.it/gaia-sins/libspatialite-${SPATIALITE_VERSION}.tar.gz
+RUN wget -q https://download.osgeo.org/proj/proj-datumgrid-1.8.zip
+RUN wget -q https://confluence.ecmwf.int/download/attachments/45757960/eccodes-${ECCODES_VERSION}-Source.tar.gz
 
-FROM vincejah/python-scientific:0.1 as final
+RUN tar xzf libwebp-${WEBP_VERSION}.tar.gz && \
+    cd libwebp-${WEBP_VERSION} && \
+    CFLAGS="-O2 -Wl,-S" ./configure --enable-silent-rules && \
+    echo "building WEBP ${WEBP_VERSION}..." \
+    make --quiet -j"$(nproc)" && make --quiet install
 
-ARG INSTALL_PREFIX
-ARG PYTHON_SHORT_VERSION
+RUN tar -zxf zstd-${ZSTD_VERSION}.tar.gz \
+    && cd zstd-${ZSTD_VERSION} \
+    && echo "building ZSTD ${ZSTD_VERSION}..." \
+    && make --quiet -j"$(nproc)" ZSTD_LEGACY_SUPPORT=0 CFLAGS=-O1 \
+    && make --quiet install ZSTD_LEGACY_SUPPORT=0 CFLAGS=-O1
 
-#COPY --from=builder  /build${INSTALL_PREFIX}/share/proj/ ${INSTALL_PREFIX}/share/proj/
-COPY --from=builder  /build${INSTALL_PREFIX}/include/ ${INSTALL_PREFIX}/include/
-COPY --from=builder  /build${INSTALL_PREFIX}/bin/ ${INSTALL_PREFIX}/bin/
-COPY --from=builder  /build${INSTALL_PREFIX}/lib/ ${INSTALL_PREFIX}/lib/
+RUN tar -xjf geos-${GEOS_VERSION}.tar.bz2 \
+    && cd geos-${GEOS_VERSION} \
+    && ./configure --prefix=/usr/local \
+    && echo "building geos ${GEOS_VERSION}..." \
+    && make --quiet -j"$(nproc)" && make --quiet install
 
-COPY --from=builder  /build/usr/share/gdal/ /usr/share/gdal/
-COPY --from=builder  /build/usr/include/ /usr/include/
-COPY --from=builder  /build_gdal_python/usr/ /usr/
-COPY --from=builder  /build_gdal_version_changing/usr/ /usr/
+RUN tar -xzvf sqlite-autoconf-${SQLITE_VERSION}.tar.gz && cd sqlite-autoconf-${SQLITE_VERSION} \
+    && ./configure --prefix=/usr/local \
+    && echo "building SQLITE ${SQLITE_VERSION}..." \
+    && make --quiet -j"$(nproc)" && make --quiet install
 
-COPY --from=builder /usr/local/lib/python${PYTHON_SHORT_VERSION}/site-packages/ /usr/local/lib/python${PYTHON_SHORT_VERSION}/site-packages/
+RUN wget -q https://download.osgeo.org/libtiff/tiff-${TIFF_VERSION}.tar.gz \
+    && tar -xf tiff-${TIFF_VERSION}.tar.gz \
+    && cd tiff-${TIFF_VERSION} \
+    && ./configure \
+    && make -j "$(nproc)" && make install
+
+
+RUN tar -xzf curl-${CURL_VERSION}.tar.gz && cd curl-${CURL_VERSION} \
+    && ./configure --prefix=/usr/local \
+    && echo "building CURL ${CURL_VERSION}..." \
+    && make --quiet -j"$(nproc)" && make --quiet install
+
+
+RUN tar -xzf proj-${PROJ_VERSION}.tar.gz \
+    && unzip proj-datumgrid-1.8.zip -d proj-${PROJ_VERSION}/data \
+    && cd proj-${PROJ_VERSION} \
+    && ./configure --prefix=/usr/local \
+    && echo "building proj ${PROJ_VERSION}..." \
+    && make --quiet -j"$(nproc)" && make --quiet install
+
+# Doesn't appear to be updated for proj6, not worth holding up the show
+# RUN tar -xzvf libspatialite-${SPATIALITE_VERSION}.tar.gz && cd libspatialite-${SPATIALITE_VERSION} \
+#     && ./configure --prefix=/usr/local \
+#     && echo "building SPATIALITE ${SPATIALITE_VERSION}..." \
+#     && make --quiet -j"$(nproc)" && make --quiet install
+
+RUN tar -xf libgeotiff-${GEOTIFF_VERSION}.tar.gz \
+    && cd libgeotiff-${GEOTIFF_VERSION} \
+    && ./configure \
+    && make -j "$(nproc)" && make install
+
+RUN tar -zxf openjpeg-${OPENJPEG_VERSION}.tar.gz \
+    && cd openjpeg-${OPENJPEG_VERSION} \
+    && mkdir build && cd build \
+    && cmake .. -DBUILD_THIRDPARTY:BOOL=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
+    && echo "building openjpeg ${OPENJPEG_VERSION}..." \
+    && make --quiet -j"$(nproc)" && make --quiet install
+
+RUN tar -xzf gdal-${GDAL_VERSION}.tar.gz && cd gdal-${GDAL_VERSION} && \
+    ./configure \
+        --disable-debug \
+        --disable-static \
+        --prefix=/usr/local \
+        --with-curl=/usr/local/bin/curl-config \
+        --with-geos \
+        --with-geotiff=internal \
+        --with-hide-internal-symbols=yes \
+        --with-libtiff=internal \
+        --with-openjpeg \
+        --with-sqlite3 \
+        --with-spatialite \
+        --with-proj=/usr/local \
+        --with-rename-internal-libgeotiff-symbols=yes \
+        --with-rename-internal-libtiff-symbols=yes \
+        --with-threads=yes \
+        --with-webp=/usr/local \
+        --with-zstd=/usr/local \
+        --with-python \
+    && echo "building GDAL ${GDAL_VERSION}..." \
+    && make --quiet -j"$(nproc)" && make --quiet install
+
+
+
+RUN tar -xzf  eccodes-$ECCODES_VERSION-Source.tar.gz && \
+    mkdir build && \
+    cd build && \
+    cmake \
+        -ENABLE_NETCDF=OFF \
+        -ENABLE_JPG=OFF \
+        -ENABLE_PNG=OFF \
+        -ENABLE_PYTHON=OFF \
+        -ENABLE_FORTRAN=OFF \
+        ../eccodes-$ECCODES_VERSION-Source \
+    && make -j"$(nproc)" && make install
+
+RUN git clone https://github.com/jswhit/pygrib.git && \
+    cd pygrib && \
+    git checkout dbe46fb2b2a833c59dfc91cf49e4703ffa45447d
+COPY ./setup.cfg ./pygrib/setup.cfg
+
+RUN cd pygrib && \
+    python setup.py build && \
+    python setup.py install && \
+    python test.py
 
 RUN ldconfig
+
+#RUN apt-get update && apt-get install -y gcc python3-dev
+# Install NumPy
+RUN CFLAGS="-g0" pip install \
+        numpy==${NUMPY_VERSION} \
+        pandas==${PANDAS_VERSION} \
+            --no-cache-dir \
+            --compile \
+            --global-option=build_ext
+
+# Remove archived libs in order to shrink image size
+RUN rm -f /usr/local/lib/*.a
+
+FROM python:3.8-slim as final
+
+COPY --from=builder /usr/local/ /usr/local/
