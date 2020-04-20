@@ -18,9 +18,11 @@ RUN apt-get install -y --no-install-recommends \
         libgrib-api-dev \
         libxml2-dev \
         pkg-config \
+        python3-dev \
         unzip \
         zlib1g-dev \
-        wget
+        wget \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /tmp
 
@@ -138,6 +140,13 @@ RUN tar -xzf gdal-${GDAL_VERSION}.tar.gz && cd gdal-${GDAL_VERSION} && \
     && make --quiet -j"$(nproc)" && make --quiet install
 
 
+# Install NumPy & Pandas
+RUN CFLAGS="-g0" pip install \
+        numpy==${NUMPY_VERSION} \
+        pandas==${PANDAS_VERSION} \
+            --no-cache-dir \
+            --compile \
+            --global-option=build_ext
 
 RUN tar -xzf  eccodes-$ECCODES_VERSION-Source.tar.gz && \
     mkdir build && \
@@ -162,15 +171,6 @@ RUN cd pygrib && \
     python test.py
 
 RUN ldconfig
-
-#RUN apt-get update && apt-get install -y gcc python3-dev
-# Install NumPy
-RUN CFLAGS="-g0" pip install \
-        numpy==${NUMPY_VERSION} \
-        pandas==${PANDAS_VERSION} \
-            --no-cache-dir \
-            --compile \
-            --global-option=build_ext
 
 # Remove archived libs in order to shrink image size
 RUN rm -f /usr/local/lib/*.a
