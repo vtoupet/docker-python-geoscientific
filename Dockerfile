@@ -1,6 +1,8 @@
 ARG GDAL_VERSION=3.0.4
 ARG PROJ_VERSION=6.3.1
+ARG PYPROJ_VERSION=2.6.0
 ARG INSTALL_PREFIX=/usr/local
+ARG PYTHON_SHORT_VERSION=3.8
 
 FROM vincejah/python-scientific:0.1 as builder
 
@@ -11,7 +13,7 @@ ARG GDAL_SOURCE_DIR=${INSTALL_PREFIX}/src/python-gdal
 
 ARG PROJ_VERSION
 ARG PROJ_SOURCE_DIR=${INSTALL_PREFIX}/src/proj
-
+ARG PYPROJ_VERSION
 
 # Install runtime dependencies
 RUN apt-get update \
@@ -57,8 +59,10 @@ RUN mkdir -p "${PROJ_SOURCE_DIR}" \
     && strip -s /build${INSTALL_PREFIX}/lib/libinternalproj.so.${PROJ_SO} \
     && for i in /build${INSTALL_PREFIX}/bin/*; do strip -s $i 2>/dev/null || /bin/true; done
 
-# Clean up PROJ sources
-RUN rm -rf "${PROJ_SOURCE_DIR}"
+# Build pyproj
+RUN export PROJ_DIR=/build${INSTALL_PREFIX}/ \
+    && export LD_LIBRARY_PATH=/build${INSTALL_PREFIX}/lib:$LD_LIBRARY_PATH \
+    && pip install pyproj==${PYPROJ_VERSION} --no-binary pyproj
 
 ##################
 # GDAL
@@ -83,11 +87,8 @@ RUN mkdir -p "${GDAL_SOURCE_DIR}" \
     # Rename things
     && mkdir -p /build_gdal_python/usr/lib \
     && mkdir -p /build_gdal_python/usr/bin \
-    && mkdir -p /build_gdal_version_changing/usr/include
-
-RUN \
-#    && mv /build/usr/lib/python3            /build_gdal_python/usr/lib \
-    mv /build/usr/lib                    /build_gdal_version_changing/usr \
+    && mkdir -p /build_gdal_version_changing/usr/include \
+    && mv /build/usr/lib                    /build_gdal_version_changing/usr \
     && mv /build/usr/include/gdal_version.h /build_gdal_version_changing/usr/include \
     && mv /build/usr/bin/*.py               /build_gdal_python/usr/bin \
     && mv /build/usr/bin                    /build_gdal_version_changing/usr \
@@ -95,12 +96,11 @@ RUN \
     && for i in /build_gdal_python/usr/lib/python3/dist-packages/osgeo/*.so; do strip -s $i 2>/dev/null || /bin/true; done \
     && for i in /build_gdal_version_changing/usr/bin/*; do strip -s $i 2>/dev/null || /bin/true; done
 
-# Cleanup GDAL sources
-RUN rm -rf "${GDAL_SOURCE_DIR}"
-
 FROM vincejah/python-scientific:0.1 as final
 
 ARG INSTALL_PREFIX
+ARG PYTHON_SHORT_VERSION
+
 #COPY --from=builder  /build${INSTALL_PREFIX}/share/proj/ ${INSTALL_PREFIX}/share/proj/
 COPY --from=builder  /build${INSTALL_PREFIX}/include/ ${INSTALL_PREFIX}/include/
 COPY --from=builder  /build${INSTALL_PREFIX}/bin/ ${INSTALL_PREFIX}/bin/
@@ -110,5 +110,7 @@ COPY --from=builder  /build/usr/share/gdal/ /usr/share/gdal/
 COPY --from=builder  /build/usr/include/ /usr/include/
 COPY --from=builder  /build_gdal_python/usr/ /usr/
 COPY --from=builder  /build_gdal_version_changing/usr/ /usr/
+
+COPY --from=builder /usr/local/lib/python${PYTHON_SHORT_VERSION}/site-packages/ /usr/local/lib/python${PYTHON_SHORT_VERSION}/site-packages/
 
 RUN ldconfig
