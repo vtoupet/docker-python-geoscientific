@@ -162,7 +162,8 @@ RUN tar -xzf  eccodes-$ECCODES_VERSION-Source.tar.gz && \
 
 RUN git clone https://github.com/jswhit/pygrib.git && \
     cd pygrib && \
-    git checkout dbe46fb2b2a833c59dfc91cf49e4703ffa45447d
+    git checkout dbe46fb2b2a833c59dfc91cf49e4703ffa45447d && \
+    pip install pyproj
 COPY ./setup.cfg ./pygrib/setup.cfg
 
 RUN cd pygrib && \
